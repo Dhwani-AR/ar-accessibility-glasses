@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*venv/
+.env
+
+# PlatformIO & Embedded
+.pio/
+.vscode/
+build/
+*.bin
+*.elf
+*.hex
