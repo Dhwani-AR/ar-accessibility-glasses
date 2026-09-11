@@ -11,3 +11,12 @@ build/
 *.bin
 *.elf
 *.hex
+
+# Secrets
+firmware/**/config.h
+
+# Model caches and recordings
+*.bin
+*.pt
+*.onnx
+*.wav
