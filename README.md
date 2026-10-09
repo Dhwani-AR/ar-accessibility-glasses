@@ -135,6 +135,7 @@ Set up PlatformIO and flash the ESP32-S3 by following [docs/setup-firmware.md](d
 - Never commit secrets or large artifacts: `.env`, `config.h`, virtual environments, model files, and recordings must stay in `.gitignore`.
 - Changes to the message format update `protocol/`, the Python code, and the C++ code in the same commit.
 - The team uses Windows and Linux, so add a `.gitattributes` file at the repository root containing `* text=auto` to keep line endings consistent, and build file paths in Python with `pathlib` rather than hardcoded separators.
+- Format C++ before every commit. Run clang-format on any `.cpp`, `.hpp`, or `.h` you changed, using the repo's `.clang-format`. Setup and commands: [docs/setup-firmware.md](docs/setup-firmware.md#code-formatting).
 
 ## Limitations
 
