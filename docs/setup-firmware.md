@@ -92,3 +92,21 @@ How to find the laptop's IP address is in [setup-backend.md](setup-backend.md). 
 ## Libraries
 
 Libraries are declared in `platformio.ini` under `lib_deps` and downloaded automatically on build. The firmware currently uses `olikraus/U8g2` for the OLED.
+
+## Code formatting
+
+The repository root has a `.clang-format` (LLVM style, 4-space indent, 120 columns). Format your own C++ files before every commit.
+
+Install (inside `pio_venv`; the same command works on Windows, Linux and macOS):
+
+    pip install clang-format==<version>
+
+Format one file:
+
+    clang-format -i firmware/src/main.cpp
+
+Check without changing anything:
+
+    clang-format --dry-run --Werror firmware/src/main.cpp
+
+Only format files in `firmware/src` and `firmware/include`, not `lib/` or generated code. In VS Code, enable "Format on Save" with the C/C++ extension or the clang-format extension.

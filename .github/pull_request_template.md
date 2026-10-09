@@ -1,0 +1,3 @@
+- [ ] C++ files formatted with clang-format
+- [ ] Protocol changes updated in `protocol/` on both sides
+- [ ] No secrets (.env, config.h) in the diff
