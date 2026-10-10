@@ -99,6 +99,10 @@ The `platformio.ini` memory settings are missing or wrong. Add `board_build.ardu
 - Confirm the pins in `main.cpp` match the wiring, and that the display's I2C address is the one U8g2 expects.
 - Check whether GPIO 8 and 9 conflict with the camera pins on your board revision.
 
+### `fatal error: credentials.h: No such file or directory`
+
+The credentials file is gitignored, so a fresh clone does not have it. Copy `firmware/include/credentials.example.h` to `firmware/include/credentials.h` and fill in your Wi-Fi details. See [setup-firmware.md](setup-firmware.md#4-wi-fi-credentials).
+
 ## Git and repository
 
 ### A secret was committed (`.env` or `config.h`)

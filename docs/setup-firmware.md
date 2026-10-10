@@ -83,9 +83,26 @@ If `platformio.ini` already has a `build_flags` entry, add `-DBOARD_HAS_PSRAM` t
 
 Check it worked by printing `ESP.getPsramSize()` and `ESP.getFlashChipSize()` over serial at boot. You should see roughly 8,388,608 and 16,777,216 bytes. The `qio_opi` setting matters: with the default memory type the PSRAM will not initialize properly. Remember that GPIO 35, 36, and 37 are reserved by Octal PSRAM and must not be used.
 
-## 4. Wi-Fi and server settings (planned)
+## 4. Wi-Fi credentials
 
-When networking is added, the Wi-Fi name, password, and the laptop's IP address and port will live in `firmware/src/config.h`, which is gitignored. A `config.example.h` with placeholder values will be committed. Copy it to `config.h` and fill in your own details. Never commit `config.h`.
+The Wi-Fi name and password live in `firmware/include/credentials.h`, which is gitignored and never committed. A fresh clone does not have it, so the build fails with `fatal error: credentials.h: No such file or directory` until you create it.
+
+Copy the template and fill in your own details:
+
+```bash
+cp firmware/include/credentials.example.h firmware/include/credentials.h
+```
+
+Then edit `credentials.h`:
+
+```cpp
+#pragma once
+
+#define WIFI_SSID "your-network-name"
+#define WIFI_PASS "your-network-password"
+```
+
+Use a 2.4 GHz network, because the ESP32-S3 does not support 5 GHz. Never commit `credentials.h`.
 
 How to find the laptop's IP address is in [setup-backend.md](setup-backend.md). The message format the firmware must speak is in [../protocol/README.md](../protocol/README.md).
 
