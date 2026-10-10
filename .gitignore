@@ -20,3 +20,6 @@ firmware/**/config.h
 *.pt
 *.onnx
 *.wav
+
+#LSP
+firmware/compile_commands.json
