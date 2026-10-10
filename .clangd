@@ -1,0 +1,7 @@
+CompileFlags:
+  CompilationDatabase: firmware
+  Remove:
+    - -mlongcalls
+    - -mtext-section-literals
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
