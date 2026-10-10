@@ -1,3 +1,4 @@
+#include "credentials.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <U8g2lib.h>
@@ -5,8 +6,6 @@
 #include <WiFiUdp.h>
 #include <Wire.h>
 
-const char *ssid = "YOUR_WIFI_SSID";
-const char *pass = "YOUR_WIFI_PASSWORD";
 const unsigned int udpPort = 5005;
 
 WiFiUDP udpClient;
@@ -22,7 +21,7 @@ struct SubtitleData {
 };
 
 void runNetworkTask(void *params) {
-    WiFi.begin(ssid, pass);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
     while (WiFi.status() != WL_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
