@@ -21,8 +21,8 @@ firmware/**/config.h
 *.onnx
 *.wav
 
-#LSP
+# LSP
 firmware/compile_commands.json
 
-#WiFi Credentials
+# WiFi Credentials
 credentials.h
