@@ -6,6 +6,8 @@ import struct
 import threading
 import numpy as np
 
+from pipeline import AudioPipeline
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
 HOST = "0.0.0.0"
@@ -23,6 +25,14 @@ CHUNK_SECONDS = 2.0
 CHUNK_FRAMES = int(SAMPLE_RATE * CHUNK_SECONDS)
 MAX_GAP_PACKETS = 50  # cap zero-fill so a bogus seq jump cannot allocate huge arrays
 
+def process_chunks(q: queue.Queue, sock: socket.socket):
+    pipe = AudioPipeline(rate=SAMPLE_RATE, width=0.14, depth=0.07)
+    while True:
+        chunk, addr = q.get()
+        reply = pipe.process(chunk)
+        if reply is not None:
+            logging.info(f"Out -> {reply}")
+            sock.sendto(json.dumps(reply).encode("utf-8"), addr)
 
 def parse_packet(pkt: bytes):
     """Return (ptype, seq, t_ms, audio), or None if the packet is malformed.
