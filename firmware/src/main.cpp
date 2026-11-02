@@ -51,8 +51,100 @@ struct SubtitleData {
     bool haptic;
 };
 
+const char *getDirTag(int angle) {
+    if (angle >= -45 && angle <= 45) {
+        return "^ FRONT";
+    }
+    if (angle > 45 && angle <= 135) {
+        return "RIGHT >>";
+    }
+    if (angle >= -135 && angle < -45) {
+        return "<< LEFT";
+    }
+    return "v REAR";
+}
+
+void drawSubtitles(const SubtitleData &sub) {
+    oled.clearBuffer();
+
+    oled.setCursor(0, 12);
+    oled.print(sub.speaker);
+
+    const char *dirTag = getDirTag(sub.angle);
+    int tagWidth = oled.getStrWidth(dirTag);
+    oled.setCursor(128 - tagWidth, 12);
+    oled.print(dirTag);
+
+    oled.drawHLine(0, 15, 128);
+
+    const int lineY[3] = {29, 44, 59};
+    int lineIdx = 0;
+    char lineBuf[32] = "";
+    char wordBuf[32] = "";
+    size_t pos = 0;
+    size_t len = strlen(sub.text);
+
+    while (pos < len && lineIdx < 3) {
+        while (pos < len && sub.text[pos] == ' ') {
+            ++pos;
+        }
+        if (pos >= len) {
+            break;
+        }
+
+        size_t wLen = 0;
+        while (pos < len && sub.text[pos] != ' ' && wLen < sizeof(wordBuf) - 1) {
+            wordBuf[wLen++] = sub.text[pos++];
+        }
+        wordBuf[wLen] = '\0';
+
+        char testBuf[64];
+        if (lineBuf[0] == '\0') {
+            snprintf(testBuf, sizeof(testBuf), "%s", wordBuf);
+        } else {
+            snprintf(testBuf, sizeof(testBuf), "%s %s", lineBuf, wordBuf);
+        }
+
+        if (oled.getStrWidth(testBuf) <= 128) {
+            strncpy(lineBuf, testBuf, sizeof(lineBuf) - 1);
+            lineBuf[sizeof(lineBuf) - 1] = '\0';
+        } else {
+            if (lineBuf[0] != '\0') {
+                oled.setCursor(0, lineY[lineIdx++]);
+                oled.print(lineBuf);
+                if (lineIdx >= 3) {
+                    break;
+                }
+            }
+            strncpy(lineBuf, wordBuf, sizeof(lineBuf) - 1);
+            lineBuf[sizeof(lineBuf) - 1] = '\0';
+        }
+    }
+
+    if (lineIdx < 3 && lineBuf[0] != '\0') {
+        oled.setCursor(0, lineY[lineIdx]);
+        oled.print(lineBuf);
+    }
+
+    oled.sendBuffer();
+}
+
+void triggerHaptic() {
+    digitalWrite(statusLedPin, HIGH);
+    int32_t buzzBuf[frameCount * 2];
+    for (size_t i = 0; i < frameCount * 2; ++i) {
+        buzzBuf[i] = (i & 64) ? 0x7FFF0000 : 0x80000000;
+    }
+    size_t bytesWritten = 0;
+    for (int b = 0; b < 15; ++b) {
+        i2s_write(I2S_NUM_0, buzzBuf, sizeof(buzzBuf), &bytesWritten, pdMS_TO_TICKS(15));
+    }
+    i2s_zero_dma_buffer(I2S_NUM_0);
+    digitalWrite(statusLedPin, LOW);
+}
+
 void initI2sBus() {
-    i2s_config_t masterCfg = {.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+    i2s_config_t masterCfg = {.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX),
                               .sample_rate = sampleRate,
                               .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
                               .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
@@ -61,7 +153,7 @@ void initI2sBus() {
                               .dma_buf_count = 6,
                               .dma_buf_len = frameCount,
                               .use_apll = false,
-                              .tx_desc_auto_clear = false,
+                              .tx_desc_auto_clear = true,
                               .fixed_mclk = 0};
 
     i2s_config_t slaveCfg = masterCfg;
@@ -71,7 +163,7 @@ void initI2sBus() {
         .bck_io_num = i2sSckPin, .ws_io_num = i2sWsPin, .data_out_num = I2S_PIN_NO_CHANGE, .data_in_num = i2sSd1Pin};
 
     i2s_pin_config_t pinCfg0 = {
-        .bck_io_num = i2sSckPin, .ws_io_num = i2sWsPin, .data_out_num = I2S_PIN_NO_CHANGE, .data_in_num = i2sSd0Pin};
+        .bck_io_num = i2sSckPin, .ws_io_num = i2sWsPin, .data_out_num = hapticPin, .data_in_num = i2sSd0Pin};
 
     i2s_driver_install(I2S_NUM_1, &slaveCfg, 0, NULL);
     i2s_set_pin(I2S_NUM_1, &pinCfg1);
@@ -156,9 +248,7 @@ void runNetworkTask(void *params) {
 }
 
 void runDisplayTask(void *params) {
-    pinMode(hapticPin, OUTPUT);
     pinMode(statusLedPin, OUTPUT);
-    digitalWrite(hapticPin, LOW);
     digitalWrite(statusLedPin, LOW);
 
     Wire.begin(oledSdaPin, oledSclPin);
@@ -176,25 +266,10 @@ void runDisplayTask(void *params) {
 
     for (;;) {
         if (xQueueReceive(subtitleQueue, &incomingData, portMAX_DELAY) == pdPASS) {
-            oled.clearBuffer();
-
-            oled.setCursor(0, 15);
-            oled.print(incomingData.speaker);
-            oled.print(" (");
-            oled.print(incomingData.angle);
-            oled.print("d):");
-
-            oled.setCursor(0, 35);
-            oled.print(incomingData.text);
-
-            oled.sendBuffer();
+            drawSubtitles(incomingData);
 
             if (incomingData.haptic) {
-                digitalWrite(hapticPin, HIGH);
-                digitalWrite(statusLedPin, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(150));
-                digitalWrite(hapticPin, LOW);
-                digitalWrite(statusLedPin, LOW);
+                triggerHaptic();
             }
         }
     }
