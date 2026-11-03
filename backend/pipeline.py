@@ -16,6 +16,7 @@ class AudioPipeline:
         self.sim_thresh = 0.68
         self.max_speakers = 6
         self.speakers = []
+        self.prev_words = []
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
@@ -89,6 +90,7 @@ class AudioPipeline:
         rms = float(np.sqrt(np.mean(mono**2)))
 
         if rms < self.speech_rms:
+            self.prev_words = []
             return None
 
         angle = self.estimate_angle(chunk)
@@ -104,6 +106,7 @@ class AudioPipeline:
             without_timestamps=True,
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
+        text = self.dedup_overlap(text)
 
         if not text:
             if loud_sound:
@@ -122,3 +125,21 @@ class AudioPipeline:
             "angle": angle,
             "haptic": haptic,
         }
+
+    def dedup_overlap(self, text):
+        words = text.split()
+        if not words:
+            return ""
+
+        max_k = min(len(self.prev_words), len(words), 6)
+        overlap = 0
+        for k in range(max_k, 0, -1):
+            w_prev = [w.lower().strip(".,!?") for w in self.prev_words[-k:]]
+            w_curr = [w.lower().strip(".,!?") for w in words[:k]]
+
+            if w_prev == w_curr:
+                overlap = k
+                break
+
+        self.prev_words = words
+        return " ".join(words[overlap:]).strip()

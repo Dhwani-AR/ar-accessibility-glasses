@@ -21,8 +21,10 @@ PTYPE_HEARTBEAT = 0x02
 
 CHANNELS = 4
 SAMPLE_RATE = 16000
-CHUNK_SECONDS = 2.0
-CHUNK_FRAMES = int(SAMPLE_RATE * CHUNK_SECONDS)
+WINDOW_SECONDS = 2.4
+STRIDE_SECONDS = 1.6
+WINDOW_FRAMES = int(SAMPLE_RATE * WINDOW_SECONDS)
+STRIDE_FRAMES = int(SAMPLE_RATE * STRIDE_SECONDS)
 MAX_GAP_PACKETS = 50  # cap zero-fill so a bogus seq jump cannot allocate huge arrays
 
 def process_chunks(q: queue.Queue, sock: socket.socket):
@@ -52,16 +54,6 @@ def parse_packet(pkt: bytes):
     pcm = np.frombuffer(pkt, dtype="<i2", offset=HDR.size)
     audio = pcm.reshape(-1, ch).T.astype(np.float32) / 32768.0
     return ptype, seq, t_ms, audio
-
-
-def process_chunks(q: queue.Queue, sock: socket.socket):
-    """Worker thread: inference runs here so the receive loop never blocks."""
-    while True:
-        chunk, addr = q.get()
-        # TODO: transcribe, diarize, estimate angle
-        reply = {"text": "Chunk Processed", "speaker": "Speaker 1", "angle": 0, "haptic": False}
-        sock.sendto(json.dumps(reply).encode("utf-8"), addr)
-
 
 def run_server():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -104,9 +96,9 @@ def run_server():
             last_seq = seq
 
             ring_buf = np.concatenate((ring_buf, audio), axis=1)
-            if ring_buf.shape[1] >= CHUNK_FRAMES:
-                chunk = ring_buf[:, :CHUNK_FRAMES].copy()
-                ring_buf = ring_buf[:, CHUNK_FRAMES:]
+            if ring_buf.shape[1] >= WINDOW_FRAMES:
+                chunk = ring_buf[:, :WINDOW_FRAMES].copy()
+                ring_buf = ring_buf[:, STRIDE_FRAMES:]
                 logging.info(f"Chunk ready: {chunk.shape} at seq={seq}")
                 try:
                     work_q.put_nowait((chunk, addr))
