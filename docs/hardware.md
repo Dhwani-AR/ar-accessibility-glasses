@@ -1,35 +1,47 @@
 # Hardware
 
-Parts list, pin assignments, optical design, and known design risks for the glasses. See [architecture.md](architecture.md) for how the hardware fits into the whole system.
+Parts list, pin assignments, microphone array geometry, optical design, and known design risks for the glasses. See [architecture.md](architecture.md) for how the hardware fits into the whole system.
 
 ## Bill of materials (summary)
 
 | Subsystem | Part | Notes |
 |---|---|---|
-| Controller | Freenove ESP32-S3-WROOM-1, N16R8 | 16 MB flash, 8 MB Octal PSRAM, dual-core Xtensa LX7 at 240 MHz. Handles peripheral timing, DMA, Wi-Fi, and display rendering |
-| Microphones | 4x INMP441 I2S MEMS | Omnidirectional. Share the bit clock (BCLK) and word select (WS) lines, with paired data lines (SD) set for left/right channel separation |
-| Camera | OmniVision OV2640, 2 MP | 24-pin DVP interface, extended 75 mm flexible flat cable from the temple compute unit to the nose bridge |
-| Display | 0.96 inch monochrome OLED, 128x64 | SSD1306 or SSD1315 controller, 4-pin I2C (VCC, GND, SCL, SDA). I2C chosen over SPI to avoid pin conflicts with the camera and Octal PSRAM |
-| Haptics | Miniature vibration motor with driver circuit | Cues the wearer toward off-axis speakers |
-| Power | 3.7 V 1000 mAh LiPo, TP4056 charge/protection board | SPDT switch isolates the battery from the ESP32-S3 5 V rail during USB flashing and debugging |
+| Controller | Freenove ESP32-S3-WROOM-1, N16R8 | 16 MB flash, 8 MB Octal PSRAM, dual-core Xtensa LX7 at 240 MHz. Handles peripheral timing, dual-bus I2S DMA, Wi-Fi UDP streaming, and display rendering |
+| Microphones | 4x INMP441 I2S MEMS | Omnidirectional rectangular array (2 front brow, 2 rear temple). Share BCLK (`GPIO 41`) and WS (`GPIO 42`), with paired data lines (`GPIO 1` and `GPIO 47`) and `L/R` channel selection |
+| Camera | OmniVision OV3660 | 24-pin DVP FPC interface connected to the onboard camera slot; left-side camera GPIOs are kept completely unpopulated |
+| Display | 0.96 inch monochrome OLED, 128x64 | SSD1306 controller, 4-pin I2C (`VCC`, `GND`, `SCL` on `GPIO 21`, `SDA` on `GPIO 14`). Remapped off `GPIO 8/9` to avoid camera bus collisions |
+| Haptics | Coin vibration motor + Adafruit MAX98357A I2S 3W Class D Amp | MAX98357A shares the `I2S0` clock bus (`GPIO 41/42`) and receives 150 ms square-wave bursts on `DIN` (`GPIO 38`), driving the motor directly via `VO+`/`VO-` |
+| Power | 3.7 V 1000 mAh LiPo, TP4056 charger, SPDT slide switch, 5 V boost converter | Battery feeds TP4056 (`B+`/`B-`); output routes through the SPDT switch and 5 V boost converter to the ESP32-S3 `5V` pin |
 
 The full budget cap is INR 7,000. Commercial micro-OLED display assemblies exceed INR 22,000, which is why the optics use a Pepper's Ghost design.
 
 ## Pin assignments
 
-| Function | GPIO | Status |
-|---|---|---|
-| OLED SDA | 8 | In use (see `firmware/src/main.cpp`) |
-| OLED SCL | 9 | In use (see `firmware/src/main.cpp`) |
-| Microphones (I2S) | TBD | Not yet wired |
-| Haptic motor | TBD | Not yet wired |
-| Camera (DVP) | Board-defined | Not yet used |
+| Component / Subsystem | Module Pin | ESP32-S3 Pin | Physical Header Position (Front View) & Wiring Notes |
+|---|---|---|---|
+| Power Rail (+3.3V Trunk) | Shared `+3.3V` | `3V3` | Left side, 1st pin from Top (8-branch shared `+3.3V` trunk wire) |
+| Ground Rail (GND Trunk) | Shared `GND` | `GND` | Right side, 1st pin from Bottom (10-branch shared `GND` trunk wire) |
+| OLED Display | `SDA` | `GPIO 14` | Left side, 2nd pin from Bottom (right above `5V`, no camera conflict) |
+| OLED Display | `SCL` | `GPIO 21` | Right side, 4th pin from Bottom (above `20`, `19`, `GND`, no camera conflict) |
+| All 4x INMP441 & MAX98357A | `SCK` / `BCLK` | `GPIO 41` | Right side, 6th pin from Top (5-branch shared bit clock bus) |
+| All 4x INMP441 & MAX98357A | `WS` / `LRC` | `GPIO 42` | Right side, 5th pin from Top (5-branch shared word select bus) |
+| Mic 1 (Front-Left, `Ch 0`) | `SD` (`I2S0`) & `L/R` | `GPIO 1` (`L/R` to `GND`) | Right side, 3rd pin from Top (`SD` spliced with Mic 2; `L/R` tied to `GND`) |
+| Mic 2 (Front-Right, `Ch 1`) | `SD` (`I2S0`) & `L/R` | `GPIO 1` (`L/R` to `3V3`) | Right side, 3rd pin from Top (`SD` spliced with Mic 1; `L/R` tied to `+3.3V`) |
+| Mic 3 (Rear-Left, `Ch 2`) | `SD` (`I2S1`) & `L/R` | `GPIO 47` (`L/R` to `GND`) | Right side, 5th pin from Bottom (`SD` spliced with Mic 4; `L/R` tied to `GND`) |
+| Mic 4 (Rear-Right, `Ch 3`) | `SD` (`I2S1`) & `L/R` | `GPIO 47` (`L/R` to `3V3`) | Right side, 5th pin from Bottom (`SD` spliced with Mic 3; `L/R` tied to `+3.3V`) |
+| MAX98357A Haptic Amp | `DIN` (`I2S0 TX`) | `GPIO 38` | Right side, 9th pin from Top (`SD` & `GAIN` left unconnected; motor on `VO+`/`VO-`) |
+| Onboard Status LEDs | Internal | `GPIO 2` & `48` | Internal to board (`IO2` status LED pulsed with haptics; leave header pins empty) |
+| OV3660 Camera | 24-pin Ribbon | FPC Slot | Keep plugged in; leave Left Header pins `4–13` and `15–18` completely empty |
+| Octal PSRAM (Reserved) | Internal | `GPIO 35, 36, 37` | Do not touch (Right side, 9th–11th pins from Bottom) |
 
-Rules for choosing pins:
+## Microphone array geometry
 
-- With 8 MB Octal PSRAM, GPIO 35, 36, and 37 are reserved by the PSRAM interface. Do not use them.
-- Confirm against the Freenove pinout that GPIO 8 and 9 do not collide with the camera data lines on your board revision before connecting the camera. If they do, move the OLED I2C pins and update `main.cpp`.
-- Update this table whenever a pin is assigned, so wiring and firmware never disagree.
+To resolve full 360-degree azimuth without front-to-back ambiguity, the four INMP441 modules are mounted in a rectangular layout (`width = 0.14 m`, `depth = 0.07 m`):
+
+- **Mic 1 (`Ch 0`, Front-Left):** Front-left brow corner (`GPIO 1`, `L/R = GND`), port facing forward (`0°`).
+- **Mic 2 (`Ch 1`, Front-Right):** Front-right brow corner (`GPIO 1`, `L/R = +3.3V`), spaced ~14 cm from Mic 1, port facing forward (`0°`).
+- **Mic 3 (`Ch 2`, Rear-Left):** Left temple arm (`GPIO 47`, `L/R = GND`), ~7 cm behind Mic 1, port facing outward/upward.
+- **Mic 4 (`Ch 3`, Rear-Right):** Right temple arm (`GPIO 47`, `L/R = +3.3V`), ~7 cm behind Mic 2, port facing outward/upward.
 
 ## Optical system: Pepper's Ghost combiner
 
@@ -48,7 +60,7 @@ The visual subsystem folds the light path so that a small OLED appears as a floa
 
 Contrast is modeled as:
 
-```
+```text
 C = (L_virtual + L_ambient) / L_ambient
 ```
 
@@ -56,29 +68,22 @@ where `L_virtual` is the luminance of the virtual image and `L_ambient` is the b
 
 **Aperture masking.** A matte black vinyl mask covers non-active OLED borders and solder pads to eliminate stray reflections.
 
-The firmware renders text with U8g2 using horizontal flip mode, because the combiner mirrors the image.
+Once mounted in the combiner, change the U8g2 constructor rotation in `firmware/src/main.cpp` from `U8G2_R0` to `U8G2_MIRROR` so reflected text reads left-to-right.
 
-## Design risks to verify early
+## Design risks and mitigations
 
-These came out of an early design review. Each is worth a quick bench test before building further.
+**Four microphones on one ESP32-S3 (Resolved).** `I2S_NUM_0` is configured in master RX/TX mode driving `GPIO 41` (`BCLK`) and `GPIO 42` (`WS`), while `I2S_NUM_1` runs in slave RX mode. The ESP32-S3 GPIO matrix (`esp_rom_gpio_connect_in_signal`) routes the master clocks internally to `I2S_NUM_1` so all 4 channels sample in lockstep.
 
-**Four microphones on one ESP32-S3.** Each I2S controller accepts one data-in line, and each INMP441 pair shares a line as left and right channels. Four microphones therefore need both I2S controllers, and keeping the two sample-synchronized is the hard part, because direction estimation depends on that alignment. Test capture and synchronization on the bench first. Microphones with TDM output are an alternative.
+**Angle resolution.** At 16 kHz, one sample is about 2.1 cm of path difference. The backend uses 2D GCC-PHAT cross-correlation across both lateral (`Left/Right`) and longitudinal (`Front/Rear`) microphone pairs to compute full 360-degree azimuth (`atan2`).
 
-**Angle resolution.** At 16 kHz, one sample is about 2.1 cm of path difference. Across a frame of about 14 cm, only about 13 distinct delay values cover 180 degrees. Sub-sample interpolation and a microphone layout that is not a single line (to avoid front/back ambiguity) are needed.
+**Haptic driver integration (Resolved).** Instead of a discrete transistor switch, the vibration motor is driven by the MAX98357A Class D amplifier sharing `I2S_NUM_0`'s clock bus and outputting a 150 ms square-wave burst on `GPIO 38` (`tx_desc_auto_clear = true`).
 
-**Optical contrast.** With 60 to 75 nits and a typical indoor background, the contrast formula gives a ratio of only about 1.3 to 1.7. That works in a controlled demo, but not outdoors. Plan the demo environment accordingly.
-
-**Power path.** A 3.7 V LiPo cannot feed a 5 V pin directly, and many onboard regulators need about 5 V in to hold 3.3 V. A boost converter may be needed, or check the dropout of the board's regulator. With Wi-Fi, camera, and microphones active, expect only a few hours of runtime from 1000 mAh.
-
-**PSRAM configuration.** The generic `esp32-s3-devkitc-1` board definition does not enable the N16R8's Octal PSRAM. See [setup-firmware.md](setup-firmware.md) for the required `platformio.ini` settings.
-
-**Camera purpose.** Decide whether the OV2640 has a role (see [architecture.md](architecture.md)) before spending time and GPIO pins on it.
+**Power path.** The 3.7 V LiPo charges via the TP4056 module (`B+`/`B-`), and `OUT+` passes through an SPDT slide switch and a 5 V boost converter into the ESP32-S3 `5V` pin.
 
 ## Files that belong in hardware/
 
-As the project grows, keep these in the `hardware/` folder:
-
-- `fritzing/` for wiring diagrams
+- `fritzing/` for wiring diagrams and netlists (`connection_diagram.fzz`, `connection_diagram_netlist.xml`)
+- `esp32_s3_pin_connections_v3.xlsx` for the complete pin map and trunk-wire splice counts
 - `cad/` for frame and cowl designs
 - `stl/` for print-ready models (use Git LFS if files become large)
 - `optics/` for combiner angle, lens, and film notes and measurements

@@ -8,36 +8,42 @@ Deaf and Hard-of-Hearing (DHH) people struggle in multi-speaker social and profe
 
 The goal is a lightweight AR assistive glasses prototype, built under a strict INR 7,000 budget, that:
 
-- captures spatial audio with a microphone array,
-- transcribes speech in near real time,
-- determines the direction of the active speaker,
-- projects subtitles into the wearer's peripheral view, and
-- gives a haptic cue toward off-axis speakers outside the wearer's direct field of view.
+- captures 4-channel spatial audio with a rectangular microphone array,
+- transcribes speech in near real time using a sliding overlapping window,
+- determines the 360-degree direction of the active speaker,
+- identifies and tracks speakers across utterances without cloud tokens,
+- projects word-wrapped subtitles and directional indicators into the wearer's peripheral view, and
+- gives a haptic cue for rear-approaching voices (`|angle| > 100°`) or loud environmental alerts.
 
 ## System overview
 
-```
+```text
 [Wearer scene]
    |
-   +--> [4x INMP441 mic array] --(I2S DMA)--> [ESP32-S3] --(UDP / Wi-Fi)--+
-   |                                                                      |
-   +--> [OV2640 camera] --------(DVP bus)---> [ESP32-S3]                  |
-                                                                          v
-   +----------------------------------------------------------------------+
-   |  LAPTOP SERVER (backend/)
-   |  Phase 1: ingest PCM buffers over a UDP socket
-   |  Phase 2: compute angle of arrival (TDoA / cross-correlation)
-   |  Phase 3: transcribe audio with faster-whisper
-   |  Phase 4: identify the active speaker with pyannote.audio
-   |  Phase 5: pack {text, speaker, angle, haptic} as JSON
-   +---------------------------------+------------------------------------+
-                                     |
-                              (UDP reply)
-                                     v
-   [ESP32-S3 firmware]
-      - parse the JSON payload
-      - trigger the haptic motor if the speaker is off-axis
-      - render text on the SSD1306 OLED with U8g2 (horizontal flip enabled)
+   +--> [4x INMP441 mic array] --(Dual I2S DMA)--> [ESP32-S3] --(UDP 5005 / Wi-Fi)--+
+   |                                                                                |
+   +--> [OV3660 camera] ---------(24-pin DVP)----> [ESP32-S3]                       |
+                                                                                    v
+   +--------------------------------------------------------------------------------+
+   |  LAPTOP SERVER (backend/server.py + backend/pipeline.py)
+   |  Phase 1: ingest 1,292-byte UDP packets (12B header + 160x4 int16 PCM frames)
+   |           into a ring buffer with sequence tracking and gap zero-filling
+   |  Phase 2: slice 2.4 s sliding windows every 1.6 s stride (0.8 s overlap)
+   |           and dispatch to a background inference worker thread
+   |  Phase 3: RMS acoustic gating (skip silence, flag loud transients >= 0.18)
+   |  Phase 4: compute 360-degree azimuth via 2D GCC-PHAT (Left/Right & Front/Rear)
+   |  Phase 5: transcribe with faster-whisper (base.en) + strip overlapping prefix words
+   |  Phase 6: identify speaker via SpeechBrain ECAPA-TDNN cosine centroid cache
+   |  Phase 7: pack {text, speaker, angle, haptic} as JSON reply
+   +---------------------------------------+----------------------------------------+
+                                           |
+                                    (UDP JSON reply)
+                                           v
+   [ESP32-S3 firmware (firmware/src/main.cpp)]
+      - Core 0 (NetTask): read dual I2S DMA, send UDP audio, parse JSON to FreeRTOS queue
+      - Core 1 (DispTask): draw split HUD header (speaker + << LEFT / ^ FRONT / RIGHT >> / v REAR)
+                           and 3-line pixel-wrapped subtitles on SSD1306 OLED (GPIO 14/21)
+      - Haptics: stream 150 ms I2S square-wave burst to MAX98357A (GPIO 38) + status LED (GPIO 2)
               |
               v
    [Optical stack] --> virtual subtitles in the wearer's field of view
@@ -45,9 +51,9 @@ The goal is a lightweight AR assistive glasses prototype, built under a strict I
 
 ## Components
 
-**Glasses (firmware/, C++ on ESP32-S3).** A thin client. It reads the microphones over I2S with DMA, sends the audio over UDP, receives a small JSON reply, drives the haptic motor, and draws text on the OLED. It runs no AI models.
+**Glasses (`firmware/`, C++ on ESP32-S3).** A dual-core FreeRTOS thin client. Core 0 (`NetTask`) drives `I2S_NUM_0` (master RX/TX) and `I2S_NUM_1` (slave RX) with shared clocks routed via the internal GPIO matrix, packs 160-frame 4-channel 16-bit PCM packets with a 12-byte `AudioHeader`, streams them over UDP port 5005, and pushes incoming JSON replies to a non-blocking queue. Core 1 (`DispTask`) renders the directional header bar and 3-line word-wrapped text on the SSD1306 OLED and triggers the MAX98357A haptic amplifier.
 
-**Laptop server (backend/, Python).** Listens on a UDP port, accumulates audio into chunks, estimates the direction of the speaker, transcribes with faster-whisper, labels speakers, and sends a short JSON reply back to the glasses.
+**Laptop server (`backend/`, Python).** `server.py` runs a non-blocking UDP receive loop (1 MB `SO_RCVBUF`) that validates packet headers, zero-fills dropped packet gaps (capped at 50 packets), accumulates a 2.4-second sliding window with a 1.6-second stride, and dispatches chunks to a worker thread running `AudioPipeline` (`pipeline.py`).
 
 **Optics.** A Pepper's Ghost combiner reflects the downward-facing OLED into the wearer's eye. Details are in [hardware.md](hardware.md).
 
@@ -55,56 +61,27 @@ The goal is a lightweight AR assistive glasses prototype, built under a strict I
 
 ### Offload AI to a laptop
 
-Models such as Whisper cannot run on an ESP32-S3. Splitting the system into a thin client and a laptop server keeps the wearable small, cheap, and low-power, and lets the AI side be developed and tested without any hardware. The cost is that the glasses are useless without the laptop on the same network. This is accepted as a design choice and listed under limitations. A possible future change is to run the server on a phone.
+Models such as Whisper and ECAPA-TDNN cannot run on an ESP32-S3. Splitting the system into a thin client and a laptop server keeps the wearable small, cheap, and low-power, and lets the AI side be developed and tested independently.
 
 ### Two programs, one contract
 
-The firmware and the backend are separate programs that share no code. They agree only on the network message format. That agreement is the contract in [protocol/](../protocol/README.md). Either side can be developed against a fake counterpart: the backend can be tested with a script that sends recorded audio, and the firmware with a script that sends canned JSON.
+The firmware and the backend agree strictly on the binary uplink header (`<BBBBII`: `type`, `version`, `channels`, `reserved`, `seq`, `t_ms` followed by interleaved `<i2` PCM) and the downlink JSON schema (`text`, `speaker`, `angle`, `haptic`) documented in [protocol/](../protocol/README.md).
 
-### Monorepo
+### Sliding window with prefix deduplication
 
-The project spans embedded firmware (C++), AI backend (Python), and physical design (CAD, optics). Both a monorepo and several independent repositories were considered.
+Hard non-overlapping 2.0-second cuts split words spoken across chunk boundaries. The server instead extracts a 2.4-second window (`38,400` frames) every 1.6 seconds (`25,600` frames), maintaining an 800 ms context overlap. `AudioPipeline.dedup_overlap()` compares up to 6 trailing words from the previous chunk against the leading words of the new chunk to strip repeated boundary words before transmitting to the OLED.
 
-The monorepo was chosen because:
+### 360-degree Direction of Arrival (2D GCC-PHAT)
 
-- A change to the packet layout or JSON schema can be made in the Python server and the C++ firmware in a single commit, so versions never mismatch.
-- Bugs that cross boundaries (for example end-to-end audio latency) live in one issue tracker.
-- Architecture notes, schematics, and milestone logs are versioned together with the code.
-- A small team avoids juggling several remotes and branches.
+Using a 2D rectangular array (`width = 0.14 m`, `depth = 0.07 m`), `AudioPipeline.estimate_angle()` computes Generalized Cross-Correlation with Phase Transform (GCC-PHAT) across the front/rear lateral pairs (`Ch 0 vs 1`, `Ch 2 vs 3`) and left/right longitudinal pairs (`Ch 2 vs 0`, `Ch 3 vs 1`), combining the normalized delay vectors via `atan2(vy, vx)` to output a full `-180°` to `+180°` azimuth without front-to-back ambiguity.
 
-The drawbacks are mixed tooling in one root (Python virtual environments, PlatformIO builds, CAD files), larger clones if binary assets are committed, and a shared commit history. These are managed with a thorough `.gitignore`, Git LFS if STL or Fritzing files grow large, and Conventional Commit scopes such as `feat(backend):` and `feat(firmware):` to keep the log readable. Path-filtered CI jobs can recover most of the independence a multi-repo setup would give.
+### Online speaker identification (ECAPA-TDNN)
 
-For comparison, a multi-repo layout (firmware, backend, hardware, docs as separate repositories) gives stricter separation of concerns, independent CI pipelines, and easier access control for outside collaborators. Its downsides are version synchronization every time the contract changes, repeated push and pull across remotes, and fragmented issue tracking. Those costs outweigh the benefits for a capstone team that owns every part.
+Instead of offline `pyannote.audio` diarization (which is too slow for sub-second turn-around and requires gated Hugging Face tokens), `AudioPipeline.identify_speaker()` extracts 192-dimensional speaker embeddings using SpeechBrain's `spkrec-ecapa-voxceleb` model and matches them against a rolling cosine-similarity centroid cache (`sim_thresh = 0.68`, up to 6 active speakers) updated via exponential moving average.
 
-### Direction of arrival
+## Development status
 
-Direction is estimated from the time difference of arrival (TDoA) between microphones, using cross-correlation. At 16 kHz, one sample corresponds to about 2.1 cm of path difference, and the microphone spacing on a glasses frame is small, so only a handful of distinct delay values fit across the field. Sub-sample interpolation (for example GCC-PHAT with parabolic peak fitting) and a microphone layout that is not a single straight line will be needed. These points are tracked in [hardware.md](hardware.md).
-
-### Speaker labeling
-
-pyannote.audio is the planned diarization tool, but it is largely an offline model that works on audio chunks. Because the system already estimates the angle of each speaker, grouping speech by direction may give a lighter and lower-latency way to label speakers. The final choice depends on testing. Currently the engine returns a fixed label, "Speaker 1".
-
-### Camera
-
-The OV2640 camera is in the hardware design, but nothing downstream consumes its output yet. One possible use is face detection to match a detected face to a sound direction. If no use is confirmed, it can be dropped to save power and GPIO pins.
-
-## Latency
-
-Speech recognition works on chunks of audio, so subtitles lag speech by roughly one to a few seconds. Shorter chunks reduce lag but lower accuracy and increase compute load. Chunk size is a tuning parameter to test, not a fixed value.
-
-## Limitations
-
-- The glasses depend on the laptop server being on and reachable.
-- Subtitle delay of one to a few seconds.
-- Optical contrast suits controlled indoor environments, not bright outdoor use.
-- Battery life with Wi-Fi, microphones, and camera active will be limited on a 1000 mAh cell.
-
-## Development order
-
-Each half can be built and tested alone:
-
-1. Backend only: record from the laptop microphone, run Whisper, print text (working now).
-2. Network: ESP32 sends test audio, laptop replies with canned JSON.
-3. Display and haptics: render replies on the OLED and drive the motor.
-4. Microphone array: capture multi-channel audio and compute angle of arrival.
-5. Integration and tuning.
+1. **Firmware (`firmware/src/main.cpp`):** Complete — Dual-bus 4-channel I2S DMA capture, UDP packet streaming, OLED remapping (`GPIO 14/21`), 3-line word wrapping, directional HUD tags, and MAX98357A I2S TX haptic bursts (`GPIO 38`).
+2. **Backend (`backend/server.py`, `backend/pipeline.py`):** Complete — Threaded UDP ingestion, sequence gap handling, 2.4 s / 1.6 s sliding window, 2D GCC-PHAT DoA, `faster-whisper` ASR with overlap deduplication, and `SpeechBrain` speaker tracking.
+3. **Hardware verification (`backend/verify_mics.py`):** Complete — Real-time 4-channel RMS terminal meter for verifying physical microphone soldering and `L/R` channel order.
+4. **Next steps:** Physical microphone tap calibration, array dimension tuning (`width`/`depth`), and optional environmental sound event classification (YAMNet) for non-speech loud alerts.

@@ -1,6 +1,6 @@
 # AR Accessibility Glasses
 
-Wearable augmented-reality closed-captioning glasses for Deaf and Hard-of-Hearing (DHH) users. The glasses capture audio from a microphone array and stream it to a companion server on a laptop. The server transcribes the speech and works out who is speaking and from which direction. The result is shown as subtitles in the wearer's field of view, with a haptic cue pointing toward speakers outside their direct line of sight.
+Wearable augmented-reality closed-captioning glasses for Deaf and Hard-of-Hearing (DHH) users. The glasses capture 4-channel spatial audio from a microphone array and stream it over Wi-Fi UDP to a companion server on a laptop. The server computes the 360-degree direction of arrival (DoA), transcribes the speech, and tracks who is speaking. The result is rendered as word-wrapped subtitles and directional indicators in the wearer's field of view, paired with a haptic cue alerting them to speakers behind them or loud environmental sounds.
 
 This is a capstone project built under a budget cap of INR 7,000.
 
@@ -16,35 +16,35 @@ This is a capstone project built under a budget cap of INR 7,000.
 
 ## How it works
 
-The glasses are a thin client: they capture audio, show text, and vibrate. All heavy AI runs on a laptop reached over Wi-Fi.
+The glasses are a dual-core FreeRTOS thin client: they capture synchronized 4-channel audio, render HUD text, and drive an I2S haptic amplifier. All signal processing and neural inference run on a laptop reached over Wi-Fi.
 
-```
-[4x INMP441 mics] --(I2S)--> [ESP32-S3] --(UDP over Wi-Fi)--> [Laptop server]
-                                  ^                                  |
-                                  |      JSON: text, speaker,        |
-                                  +------------ angle, haptic -------+
-                                  |
-                                  +--> OLED (subtitles) + haptic motor
+```text
+[4x INMP441 mics] --(Dual I2S DMA)--> [ESP32-S3] --(UDP 5005 / Wi-Fi)--> [Laptop server]
+                                          ^                                     |
+                                          |        JSON: text, speaker,         |
+                                          +-------------- angle, haptic --------+
+                                          |
+                                          +--> SSD1306 OLED (3-line HUD) + MAX98357A Haptics
 ```
 
-The firmware and the backend share no code. They share only an agreed message format, described in [protocol/README.md](protocol/README.md). For the full pipeline and design reasoning, see [docs/architecture.md](docs/architecture.md).
+The firmware and the backend share no code. They share only an agreed binary uplink header (`<BBBBII` + 4-channel PCM) and JSON downlink format, described in [protocol/README.md](protocol/README.md). For the full pipeline and design reasoning, see [docs/architecture.md](docs/architecture.md).
 
 ## Repository layout
 
 This is a monorepo, so a change to the message format can be made on both sides in a single commit.
 
-```
+```text
 ar-accessibility-glasses/
-|-- backend/      Python AI server (faster-whisper, pyannote.audio), runs on the laptop
-|-- firmware/     ESP32-S3 firmware (C++, PlatformIO, Arduino framework)
-|-- hardware/     CAD, wiring diagrams, optics files
+|-- backend/      Python AI server (2D GCC-PHAT, faster-whisper, SpeechBrain ECAPA-TDNN)
+|-- firmware/     ESP32-S3 firmware (C++, PlatformIO, FreeRTOS, U8g2, ArduinoJson)
+|-- hardware/     Fritzing diagrams, netlists, pin connection sheets, CAD, and optics files
 |-- protocol/     Message contract between firmware and backend
 `-- docs/         Architecture, hardware, setup guides, troubleshooting, milestone logs
 ```
 
 ## Quick start
 
-These steps get the speech-to-text part running on your laptop with no ESP32 needed. Commands are shown for Windows (PowerShell) and Linux/macOS. You need Python 3.12 and Git installed.
+These steps get the backend server and hardware verification tools running on your laptop. Commands are shown for Windows (PowerShell) and Linux/macOS. You need Python 3.12 and Git installed.
 
 ### 1. Install the backend
 
@@ -66,80 +66,75 @@ source aiml_venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If PowerShell refuses to run the activation script, see [docs/troubleshooting.md](docs/troubleshooting.md). Linux users also need PortAudio installed; see [docs/setup-backend.md](docs/setup-backend.md).
+Both `faster-whisper` (`base.en`) and SpeechBrain (`speechbrain/spkrec-ecapa-voxceleb`) are open-access models and download automatically on first run without requiring a Hugging Face account or `.env` token. If PowerShell blocks the activation script, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
-### 2. Get a Hugging Face token and accept the model terms
+### 2. Verify the 4-channel microphone array (`verify_mics.py`)
 
-Speaker diarization uses gated pyannote models, so this step is required even though the models are free.
+Once your ESP32-S3 is flashed and streaming over UDP port `5005`, test your physical microphone wiring and `L/R` channel order before loading the AI models:
 
-1. Create an account at <https://huggingface.co/join>.
-2. Create a **Read** token at <https://huggingface.co/settings/tokens> and copy it (it starts with `hf_` and is shown only once).
-3. While logged in, open each page below, fill in the short form, and accept the conditions:
-   - <https://huggingface.co/pyannote/segmentation-3.0>
-   - <https://huggingface.co/pyannote/speaker-diarization-3.1>
-   - <https://huggingface.co/pyannote/speaker-diarization-community-1>
-
-Skipping step 3 causes a `403 Forbidden` error when the models download. Full walkthrough: [docs/setup-backend.md](docs/setup-backend.md).
-
-### 3. Create your `.env` file
-
-Create `backend/.env` containing one line, with your own token:
-
-```
-HF_TOKEN=hf_your_token_here
-```
-
-Never commit this file. Windows users: avoid Notepad's default `.txt` extension and PowerShell's `echo >` redirection; the safe commands are in [docs/setup-backend.md](docs/setup-backend.md).
-
-### 4. Run the local AI test
-
-```
+```bash
 cd backend
-python test_local_ai.py
+python verify_mics.py
 ```
 
-This records 5 seconds from your microphone and prints the transcription. The first run downloads the models and takes a few minutes.
+Lightly tap each microphone on the glasses frame to confirm that **Front-Left = `Ch0`**, **Front-Right = `Ch1`**, **Rear-Left = `Ch2`**, and **Rear-Right = `Ch3`**. Stop the script with `Ctrl+C` when finished.
 
-### 5. Firmware (when you have the board)
+### 3. Run the AI UDP server (`server.py`)
 
-Set up PlatformIO and flash the ESP32-S3 by following [docs/setup-firmware.md](docs/setup-firmware.md).
+```bash
+cd backend
+python server.py
+```
+
+The server listens on `0.0.0.0:5005`, accumulates a **2.4-second sliding window** every **1.6-second stride**, computes 360-degree speaker angles via 2D GCC-PHAT, transcribes speech with prefix overlap deduplication, identifies speakers via ECAPA-TDNN embeddings, and sends `{text, speaker, angle, haptic}` JSON replies back to the glasses.
+
+To test the server handshake from another terminal without the ESP32:
+
+```bash
+python -c "import socket, struct; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3); s.sendto(struct.pack('<BBBBII', 2, 1, 4, 0, 1, 100), ('127.0.0.1', 5005)); print(s.recvfrom(4096)[0].decode())"
+```
+
+### 4. Build and flash the firmware
+
+Copy `firmware/include/credentials.example.h` to `firmware/include/credentials.h`, set your 2.4 GHz `WIFI_SSID`, `WIFI_PASS`, and laptop `SERVER_IP`, and flash the ESP32-S3 using PlatformIO. Full instructions: [docs/setup-firmware.md](docs/setup-firmware.md).
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | Problem statement, system pipeline, design decisions |
-| [docs/hardware.md](docs/hardware.md) | Parts list, pin assignments, optical system, design risks |
-| [docs/setup-backend.md](docs/setup-backend.md) | Full backend setup: Python, Hugging Face, `.env`, running the server, firewall |
-| [docs/setup-firmware.md](docs/setup-firmware.md) | PlatformIO setup, building, flashing, serial port issues |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Known issues and fixes for every part of the project |
-| [protocol/README.md](protocol/README.md) | UDP packet layout and JSON reply format |
+| [docs/architecture.md](docs/architecture.md) | Problem statement, 7-stage system pipeline, sliding-window & DoA design decisions |
+| [docs/hardware.md](docs/hardware.md) | BOM, complete ESP32-S3 pin assignments, 4-mic geometry, Pepper's Ghost optics |
+| [docs/setup-backend.md](docs/setup-backend.md) | Backend virtual environment, `verify_mics.py`, running `server.py`, firewall setup |
+| [docs/setup-firmware.md](docs/setup-firmware.md) | PlatformIO setup, Octal PSRAM flags, `credentials.h`, flashing and serial monitoring |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Known issues and fixes across backend, network, firmware, and hardware |
+| [protocol/README.md](protocol/README.md) | Binary `<BBBBII` UDP audio packet layout and JSON reply schema |
 
 ## Project status
 
 | Area | Status |
 |---|---|
-| Repository structure | Done |
-| PlatformIO project and OLED test | Done (verify on hardware) |
-| Speech-to-text on laptop (faster-whisper) | Working with laptop microphone |
-| Speaker diarization (pyannote.audio) | Loads once gated access is accepted; label still hardcoded |
-| UDP server | Stub only (fixed reply, no inference) |
-| Protocol specification | Draft |
-| Microphone array capture, angle of arrival | Not started |
-| Audio streaming from ESP32 | Not started |
-| Haptics, camera, optics build, power | Not started |
+| Repository structure & documentation | Done |
+| Dual-bus 4-channel I2S DMA capture & UDP streaming (`firmware/`) | Done |
+| 3-line OLED word wrapping & directional HUD header (`GPIO 14/21`) | Done |
+| MAX98357A I2S TX haptic waveform driver (`GPIO 38`) | Done |
+| Threaded UDP server with 2.4 s / 1.6 s sliding window (`backend/server.py`) | Done |
+| 360° 2D GCC-PHAT Direction of Arrival (`backend/pipeline.py`) | Done |
+| Speech-to-text (`faster-whisper`) with boundary overlap deduplication | Done |
+| Online speaker identification (`SpeechBrain ECAPA-TDNN` centroid cache) | Done |
+| 4-channel hardware verification utility (`backend/verify_mics.py`) | Done |
+| Physical frame assembly, mic spacing calibration & YAMNet sound alerts | In progress |
 
 ## Conventions
 
 - Commit messages follow Conventional Commits with a subsystem scope, for example `feat(backend): ...` or `feat(firmware): ...`.
-- Never commit secrets or large artifacts: `.env`, `config.h`, `credentials.h`, virtual environments, model files, and recordings must stay in `.gitignore`.
+- Never commit secrets or large artifacts: `credentials.h`, `.env`, virtual environments (`aiml_venv/`, `pio_venv/`), `.pio/`, model weights, and recordings must stay in `.gitignore`.
 - Changes to the message format update `protocol/`, the Python code, and the C++ code in the same commit.
-- The team uses Windows and Linux, so add a `.gitattributes` file at the repository root containing `* text=auto` to keep line endings consistent, and build file paths in Python with `pathlib` rather than hardcoded separators.
-- Format C++ before every commit. Run clang-format on any `.cpp`, `.hpp`, or `.h` you changed, using the repo's `.clang-format`. Setup and commands: [docs/setup-firmware.md](docs/setup-firmware.md#code-formatting).
+- The team uses Windows and Linux, so keep `* text=auto` in `.gitattributes` to normalize line endings, and build file paths in Python with `pathlib` rather than hardcoded separators.
+- Format C++ before every commit. Run `clang-format -i firmware/src/main.cpp` using the repo's `.clang-format`. Setup and commands: [docs/setup-firmware.md](docs/setup-firmware.md#code-formatting).
 
 ## Limitations
 
-The glasses depend on the laptop being on and reachable, because the AI models cannot run on an ESP32. Subtitles will lag speech by roughly one to a few seconds. The optical combiner suits controlled indoor lighting, not bright sunlight. More detail is in [docs/architecture.md](docs/architecture.md) and [docs/hardware.md](docs/hardware.md).
+The glasses depend on the laptop server being on and reachable over a local 2.4 GHz Wi-Fi network or hotspot, because the AI models cannot run on an ESP32-S3. Subtitles lag speech by roughly 1.6 to 2.0 seconds due to sliding-window buffering and inference. The optical combiner suits controlled indoor lighting rather than direct outdoor sunlight. More detail is in [docs/architecture.md](docs/architecture.md) and [docs/hardware.md](docs/hardware.md).
 
 ## Author
 
