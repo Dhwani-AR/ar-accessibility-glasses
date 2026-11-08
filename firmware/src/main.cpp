@@ -7,7 +7,7 @@
 #include <Wire.h>
 #include <driver/gpio.h>
 #include <driver/i2s.h>
-#include <rom/gpio.h>
+#include <esp_rom_gpio.h>
 #include <soc/gpio_sig_map.h>
 
 const unsigned int udpPort = 5005;
