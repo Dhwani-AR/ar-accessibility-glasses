@@ -26,7 +26,7 @@ const size_t frameCount = 160;
 const size_t chCount = 4;
 
 WiFiUDP udpClient;
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE, oledSclPin, oledSdaPin);
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_MIRROR_VERTICAL, U8X8_PIN_NONE, oledSclPin, oledSdaPin);
 
 QueueHandle_t subtitleQueue;
 
@@ -252,7 +252,11 @@ void runDisplayTask(void *params) {
     digitalWrite(statusLedPin, LOW);
 
     Wire.begin(oledSdaPin, oledSclPin);
+    Wire.beginTransmission(0x3C);
+    uint8_t oledAddr = (Wire.endTransmission() == 0) ? 0x3C : 0x3D;
+    oled.setI2CAddress(oledAddr * 2);
     oled.begin();
+    oled.setContrast(255);
     oled.setFont(u8g2_font_ncenB08_tr);
 
     oled.clearBuffer();
