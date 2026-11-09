@@ -1,3 +1,4 @@
+import difflib
 import math
 import numpy as np
 import torch
@@ -17,6 +18,8 @@ class AudioPipeline:
         self.max_speakers = 6
         self.speakers = []
         self.prev_words = []
+        self.target_names = ("meehir", "mihir", "meher", "mehir")
+        self.name_thresh = 0.78
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute = "float16" if device == "cuda" else "int8"
@@ -85,6 +88,21 @@ class AudioPipeline:
 
         return f"Speaker {best_idx + 1}"
 
+    def has_name_match(self, text):
+        for raw in text.split():
+            word = raw.lower().strip(".,!?;:\"'()-")
+            if word.endswith("'s") or word.endswith("’s"):
+                word = word[:-2]
+            if len(word) < 4:
+                continue
+            for target in self.target_names:
+                if word == target:
+                    return True
+                ratio = difflib.SequenceMatcher(None, word, target).ratio()
+                if ratio >= self.name_thresh:
+                    return True
+        return False
+
     def process(self, chunk):
         mono = np.mean(chunk, axis=0)
         rms = float(np.sqrt(np.mean(mono**2)))
@@ -96,7 +114,6 @@ class AudioPipeline:
         angle = self.estimate_angle(chunk)
         rear_voice = abs(angle) > 100
         loud_sound = rms >= self.alert_rms
-        haptic = bool(rear_voice or loud_sound)
 
         segments, _ = self.asr.transcribe(
             mono,
@@ -104,6 +121,7 @@ class AudioPipeline:
             beam_size=1,
             vad_filter=True,
             without_timestamps=True,
+            initial_prompt="Meehir",
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
         text = self.dedup_overlap(text)
@@ -117,6 +135,9 @@ class AudioPipeline:
                     "haptic": True,
                 }
             return None
+
+        name_heard = self.has_name_match(text)
+        haptic = bool(rear_voice or loud_sound or name_heard)
 
         speaker = self.identify_speaker(mono)
         return {
