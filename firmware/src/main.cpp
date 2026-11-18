@@ -251,10 +251,16 @@ void runDisplayTask(void *params) {
     pinMode(statusLedPin, OUTPUT);
     digitalWrite(statusLedPin, LOW);
 
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     Wire.begin(oledSdaPin, oledSclPin);
+    Wire.setClock(100000);
     Wire.beginTransmission(0x3C);
     uint8_t oledAddr = (Wire.endTransmission() == 0) ? 0x3C : 0x3D;
+    Wire.end();
+
     oled.setI2CAddress(oledAddr * 2);
+    oled.setBusClock(100000);
     oled.begin();
     oled.setContrast(255);
     oled.setFont(u8g2_font_ncenB08_tr);
