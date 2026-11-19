@@ -1,4 +1,5 @@
 import difflib
+import logging
 import math
 import numpy as np
 import torch
@@ -138,6 +139,8 @@ class AudioPipeline:
             return None
 
         name_heard = self.has_name_match(text)
+        if name_heard:
+            logging.info(f"Name detected -> {text}")
         haptic = bool(rear_voice or loud_sound or name_heard)
 
         speaker = self.identify_speaker(mono)
