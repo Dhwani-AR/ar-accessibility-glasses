@@ -104,6 +104,7 @@ class AudioPipeline:
         return False
 
     def process(self, chunk):
+        chunk = chunk - np.mean(chunk, axis=1, keepdims=True)
         mono = np.mean(chunk, axis=0)
         rms = float(np.sqrt(np.mean(mono**2)))
 
