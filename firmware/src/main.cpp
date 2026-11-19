@@ -173,8 +173,8 @@ void initI2sBus() {
 
     gpio_set_direction((gpio_num_t)i2sSckPin, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_direction((gpio_num_t)i2sWsPin, GPIO_MODE_INPUT_OUTPUT);
-    esp_rom_gpio_connect_out_signal(i2sSckPin, I2S0I_BCK_OUT_IDX, false, false);
-    esp_rom_gpio_connect_out_signal(i2sWsPin, I2S0I_WS_OUT_IDX, false, false);
+    esp_rom_gpio_connect_out_signal(i2sSckPin, I2S0O_BCK_OUT_IDX, false, false);
+    esp_rom_gpio_connect_out_signal(i2sWsPin, I2S0O_WS_OUT_IDX, false, false);
     esp_rom_gpio_connect_in_signal(i2sSckPin, I2S1I_BCK_IN_IDX, false);
     esp_rom_gpio_connect_in_signal(i2sWsPin, I2S1I_WS_IN_IDX, false);
 
@@ -218,6 +218,13 @@ void runNetworkTask(void *params) {
             }
 
             outPkt.hdr = {0x01, 1, chCount, 0, seqNum++, millis()};
+
+            if (seqNum % 100 == 0) {
+                Serial.printf("b0=%u b1=%u raw0=%08lx,%08lx raw1=%08lx,%08lx\n", bytesRead0, bytesRead1,
+                              (unsigned long)rawBus0[0], (unsigned long)rawBus0[1], (unsigned long)rawBus1[0],
+                              (unsigned long)rawBus1[1]);
+            }
+
             udpClient.beginPacket(SERVER_IP, udpPort);
             udpClient.write(reinterpret_cast<const uint8_t *>(&outPkt), sizeof(outPkt));
             udpClient.endPacket();
