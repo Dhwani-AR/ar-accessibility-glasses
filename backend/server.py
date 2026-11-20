@@ -33,7 +33,11 @@ def process_chunks(q: queue.Queue, sock: socket.socket):
         chunk, addr = q.get()
         reply = pipe.process(chunk)
         if reply is not None:
-            logging.info(f"Out -> {reply}")
+            logging.info(
+                f"speaker={reply['speaker']} | angle={reply['angle']} | "
+                f"sentiment={reply['sentiment']} ({reply['score']:+.2f}) | "
+                f"haptic={reply['haptic']} | text={reply['text']}"
+            )
             sock.sendto(json.dumps(reply).encode("utf-8"), addr)
 
 def parse_packet(pkt: bytes):
