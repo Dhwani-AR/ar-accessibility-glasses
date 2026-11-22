@@ -33,7 +33,7 @@ source aiml_venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The first install downloads PyTorch, `faster-whisper`, and `speechbrain`. Both `faster-whisper` (`base.en`) and SpeechBrain (`speechbrain/spkrec-ecapa-voxceleb`) are open-access models and download automatically on first run without requiring a Hugging Face token.
+The first install downloads PyTorch, `faster-whisper`, `speechbrain`, and `vaderSentiment`. Both `faster-whisper` (`base.en`) and SpeechBrain (`speechbrain/spkrec-ecapa-voxceleb`) are open-access models and download automatically on first run without requiring a Hugging Face token.
 
 ### Activating the environment later
 
@@ -76,10 +76,10 @@ python server.py
 ```
 
 What `server.py` and `pipeline.py` do at runtime:
-1. **Model initialization:** Loads `faster-whisper` (`base.en`, `float16` on CUDA or `int8` on CPU) and SpeechBrain `EncoderClassifier` (`speechbrain/spkrec-ecapa-voxceleb`) inside a background worker thread.
-2. **UDP ingestion:** Listens on `0.0.0.0:5005` with a 1 MB socket receive buffer (`SO_RCVBUF`), validates the 12-byte `<BBBBII` packet header, handles sequence wrap-around/reordering, and zero-fills packet gaps up to 50 packets.
+1. **Model initialization:** Loads `faster-whisper` (`base.en`, `float16` on CUDA or `int8` on CPU), SpeechBrain `EncoderClassifier` (`speechbrain/spkrec-ecapa-voxceleb`), and VADER `SentimentIntensityAnalyzer` inside a background worker thread.
+2. **UDP ingestion:** Listens on `0.0.0.0:5005` with a 1 MiB socket receive buffer (`SO_RCVBUF`), validates the 12-byte `<BBBBII` packet header, handles sequence wrap-around/reordering, and zero-fills packet gaps up to 50 packets.
 3. **Sliding-window chunking:** Accumulates a **2.4-second window** (`38,400` samples per channel) and slides forward by a **1.6-second stride** (`25,600` samples), providing an 800 ms overlap so boundary words are not truncated.
-4. **Inference & reply:** Computes 360-degree azimuth via 2D GCC-PHAT, transcribes speech with prefix overlap deduplication, tracks speaker identity via cosine similarity, and sends `{text, speaker, angle, haptic}` JSON replies back to the glasses.
+4. **Inference & reply:** Removes per-channel DC offset, computes 360-degree azimuth via 2D GCC-PHAT, transcribes speech with prefix overlap deduplication, scores sentiment with VADER (`[Pos]`/`[Neg]`/`[Neu]`), checks for target name calls, tracks speaker identity via cosine similarity, logs structured output (`speaker`, `angle`, `sentiment`, `haptic`, `text`), and sends `{text, speaker, angle, haptic, sentiment, score}` JSON replies back to the glasses.
 
 To test the UDP server handshake without the ESP32, run a simulated heartbeat packet (`ptype = 0x02`) from a second terminal:
 
@@ -107,5 +107,5 @@ Use a 2.4 GHz mobile hotspot or laptop hotspot rather than campus Wi-Fi, which o
 
 ## Dependency notes
 
-- Versions are pinned in `backend/requirements.txt`, including `av==16.1.0`, `faster-whisper==1.2.1`, `speechbrain==1.1.2`, `torch==2.14.1`, and `torchaudio==2.11.0`.
+- Versions are pinned in `backend/requirements.txt`, including `av==16.1.0`, `faster-whisper==1.2.1`, `speechbrain==1.1.2`, `torch==2.14.1`, `torchaudio==2.11.0`, and `vaderSentiment==3.3.2`.
 - Do not upgrade `av` to `>=17` without testing, as it breaks `faster-whisper` 1.2.1 file decoding.
