@@ -186,6 +186,7 @@ void initI2sBus() {
 
 void runNetworkTask(void *params) {
     WiFi.begin(WIFI_SSID, WIFI_PASS);
+    WiFi.setSleep(false);
     while (WiFi.status() != WL_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
