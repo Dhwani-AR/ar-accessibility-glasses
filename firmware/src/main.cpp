@@ -20,7 +20,9 @@ const int i2sSd0Pin = 1;
 const int i2sSd1Pin = 47;
 const int hapticPin = 40;
 const int statusLedPin = 2;
+const int rgbLedPin = 48;
 
+const uint32_t ledHoldMs = 1500;
 const int sampleRate = 16000;
 const size_t frameCount = 160;
 const size_t chCount = 4;
@@ -50,6 +52,14 @@ struct SubtitleData {
     int angle;
     bool haptic;
 };
+
+void setRgbLed(uint8_t r, uint8_t g, uint8_t b) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    rgbLedWrite(rgbLedPin, r, g, b);
+#else
+    neopixelWrite(rgbLedPin, r, g, b);
+#endif
+}
 
 const char *getDirTag(int angle) {
     if (angle >= -45 && angle <= 45) {
@@ -254,6 +264,7 @@ void runDisplayTask(void *params) {
     digitalWrite(statusLedPin, LOW);
     pinMode(hapticPin, OUTPUT);
     digitalWrite(hapticPin, LOW);
+    setRgbLed(0, 0, 0);
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -277,12 +288,31 @@ void runDisplayTask(void *params) {
     oled.sendBuffer();
 
     SubtitleData incomingData;
+    bool ledOn = false;
+    uint32_t ledOffMs = 0;
 
     for (;;) {
-        if (xQueueReceive(subtitleQueue, &incomingData, portMAX_DELAY) == pdPASS) {
+        TickType_t waitTicks = portMAX_DELAY;
+        if (ledOn) {
+            int32_t rem = static_cast<int32_t>(ledOffMs - millis());
+            if (rem <= 0) {
+                setRgbLed(0, 0, 0);
+                ledOn = false;
+            } else {
+                waitTicks = pdMS_TO_TICKS(rem);
+                if (waitTicks == 0) {
+                    waitTicks = 1;
+                }
+            }
+        }
+
+        if (xQueueReceive(subtitleQueue, &incomingData, waitTicks) == pdPASS) {
             drawSubtitles(incomingData);
 
             if (incomingData.haptic) {
+                setRgbLed(0, 0, 64);
+                ledOn = true;
+                ledOffMs = millis() + ledHoldMs;
                 triggerHaptic();
             }
         }
