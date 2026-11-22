@@ -18,7 +18,7 @@ const int i2sSckPin = 41;
 const int i2sWsPin = 42;
 const int i2sSd0Pin = 1;
 const int i2sSd1Pin = 47;
-const int hapticPin = 38;
+const int hapticPin = 40;
 const int statusLedPin = 2;
 
 const int sampleRate = 16000;
@@ -131,15 +131,9 @@ void drawSubtitles(const SubtitleData &sub) {
 
 void triggerHaptic() {
     digitalWrite(statusLedPin, HIGH);
-    int32_t buzzBuf[frameCount * 2];
-    for (size_t i = 0; i < frameCount * 2; ++i) {
-        buzzBuf[i] = (i & 64) ? 0x7FFF0000 : 0x80000000;
-    }
-    size_t bytesWritten = 0;
-    for (int b = 0; b < 15; ++b) {
-        i2s_write(I2S_NUM_0, buzzBuf, sizeof(buzzBuf), &bytesWritten, pdMS_TO_TICKS(15));
-    }
-    i2s_zero_dma_buffer(I2S_NUM_0);
+    digitalWrite(hapticPin, HIGH);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    digitalWrite(hapticPin, LOW);
     digitalWrite(statusLedPin, LOW);
 }
 
@@ -163,7 +157,7 @@ void initI2sBus() {
         .bck_io_num = i2sSckPin, .ws_io_num = i2sWsPin, .data_out_num = I2S_PIN_NO_CHANGE, .data_in_num = i2sSd1Pin};
 
     i2s_pin_config_t pinCfg0 = {
-        .bck_io_num = i2sSckPin, .ws_io_num = i2sWsPin, .data_out_num = hapticPin, .data_in_num = i2sSd0Pin};
+        .bck_io_num = i2sSckPin, .ws_io_num = i2sWsPin, .data_out_num = I2S_PIN_NO_CHANGE, .data_in_num = i2sSd0Pin};
 
     i2s_driver_install(I2S_NUM_1, &slaveCfg, 0, NULL);
     i2s_set_pin(I2S_NUM_1, &pinCfg1);
@@ -258,6 +252,8 @@ void runNetworkTask(void *params) {
 void runDisplayTask(void *params) {
     pinMode(statusLedPin, OUTPUT);
     digitalWrite(statusLedPin, LOW);
+    pinMode(hapticPin, OUTPUT);
+    digitalWrite(hapticPin, LOW);
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
