@@ -1,6 +1,6 @@
 # AR Accessibility Glasses
 
-Wearable augmented-reality closed-captioning glasses for Deaf and Hard-of-Hearing (DHH) users. The glasses capture 4-channel spatial audio from a microphone array and stream it over Wi-Fi UDP to a companion server on a laptop. The server computes the 360-degree direction of arrival (DoA), transcribes the speech, and tracks who is speaking. The result is rendered as word-wrapped subtitles and directional indicators in the wearer's field of view, paired with a haptic cue alerting them to speakers behind them or loud environmental sounds.
+Wearable augmented-reality closed-captioning glasses for Deaf and Hard-of-Hearing (DHH) users. The glasses capture 4-channel spatial audio from a microphone array and stream it over Wi-Fi UDP to a companion server on a laptop. The server removes DC offset, computes the 360-degree direction of arrival (DoA), transcribes speech with VADER sentiment tags, tracks who is speaking, and detects name calls. The result is rendered as word-wrapped subtitles and directional indicators in the wearer's field of view, paired with a haptic pulse and an onboard RGB LED alert for rear speakers, loud sounds, or name calls.
 
 This is a capstone project built under a budget cap of INR 7,000.
 
@@ -16,15 +16,16 @@ This is a capstone project built under a budget cap of INR 7,000.
 
 ## How it works
 
-The glasses are a dual-core FreeRTOS thin client: they capture synchronized 4-channel audio, render HUD text, and drive an I2S haptic amplifier. All signal processing and neural inference run on a laptop reached over Wi-Fi.
+The glasses are a dual-core FreeRTOS thin client: they capture synchronized 4-channel audio, render vertically mirrored HUD text, and drive GPIO haptic and onboard RGB LED alerts. All signal processing and neural inference run on a laptop reached over Wi-Fi.
 
 ```text
 [4x INMP441 mics] --(Dual I2S DMA)--> [ESP32-S3] --(UDP 5005 / Wi-Fi)--> [Laptop server]
                                           ^                                     |
-                                          |        JSON: text, speaker,         |
-                                          +-------------- angle, haptic --------+
+                                          |    JSON: text, speaker, angle,      |
+                                          +---- haptic, sentiment, score -------+
                                           |
-                                          +--> SSD1306 OLED (3-line HUD) + MAX98357A Haptics
+                                          +--> SSD1306 OLED (3-line HUD)
+                                               + Haptic GPIO 40 (200 ms) + RGB LED GPIO 48 (1.5 s)
 ```
 
 The firmware and the backend share no code. They share only an agreed binary uplink header (`<BBBBII` + 4-channel PCM) and JSON downlink format, described in [protocol/README.md](protocol/README.md). For the full pipeline and design reasoning, see [docs/architecture.md](docs/architecture.md).
@@ -35,7 +36,7 @@ This is a monorepo, so a change to the message format can be made on both sides 
 
 ```text
 ar-accessibility-glasses/
-|-- backend/      Python AI server (2D GCC-PHAT, faster-whisper, SpeechBrain ECAPA-TDNN)
+|-- backend/      Python AI server (2D GCC-PHAT, faster-whisper, SpeechBrain ECAPA-TDNN, VADER)
 |-- firmware/     ESP32-S3 firmware (C++, PlatformIO, FreeRTOS, U8g2, ArduinoJson)
 |-- hardware/     Fritzing diagrams, netlists, pin connection sheets, CAD, and optics files
 |-- protocol/     Message contract between firmware and backend
@@ -86,7 +87,7 @@ cd backend
 python server.py
 ```
 
-The server listens on `0.0.0.0:5005`, accumulates a **2.4-second sliding window** every **1.6-second stride**, computes 360-degree speaker angles via 2D GCC-PHAT, transcribes speech with prefix overlap deduplication, identifies speakers via ECAPA-TDNN embeddings, and sends `{text, speaker, angle, haptic}` JSON replies back to the glasses.
+The server listens on `0.0.0.0:5005`, accumulates a **2.4-second sliding window** every **1.6-second stride**, removes per-channel DC offset, computes 360-degree speaker angles via 2D GCC-PHAT, transcribes speech with prefix overlap deduplication, tags sentiment (`[Pos]`/`[Neg]`/`[Neu]`) via VADER, detects target name calls, identifies speakers via ECAPA-TDNN embeddings, and sends `{text, speaker, angle, haptic, sentiment, score}` JSON replies back to the glasses.
 
 To test the server handshake from another terminal without the ESP32:
 
@@ -102,10 +103,10 @@ Copy `firmware/include/credentials.example.h` to `firmware/include/credentials.h
 
 | Document | What it covers |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | Problem statement, 7-stage system pipeline, sliding-window & DoA design decisions |
+| [docs/architecture.md](docs/architecture.md) | Problem statement, system pipeline, sliding-window, DoA, sentiment & alert design |
 | [docs/hardware.md](docs/hardware.md) | BOM, complete ESP32-S3 pin assignments, 4-mic geometry, Pepper's Ghost optics |
 | [docs/setup-backend.md](docs/setup-backend.md) | Backend virtual environment, `verify_mics.py`, running `server.py`, firewall setup |
-| [docs/setup-firmware.md](docs/setup-firmware.md) | PlatformIO setup, Octal PSRAM flags, `credentials.h`, flashing and serial monitoring |
+| [docs/setup-firmware.md](docs/setup-firmware.md) | PlatformIO setup, N16R8 Octal PSRAM flags, `credentials.h`, flashing and serial monitoring |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Known issues and fixes across backend, network, firmware, and hardware |
 | [protocol/README.md](protocol/README.md) | Binary `<BBBBII` UDP audio packet layout and JSON reply schema |
 
@@ -113,16 +114,17 @@ Copy `firmware/include/credentials.example.h` to `firmware/include/credentials.h
 
 | Area | Status |
 |---|---|
-| Repository structure & documentation | Done |
-| Dual-bus 4-channel I2S DMA capture & UDP streaming (`firmware/`) | Done |
-| 3-line OLED word wrapping & directional HUD header (`GPIO 14/21`) | Done |
-| MAX98357A I2S TX haptic waveform driver (`GPIO 38`) | Done |
+| Repository structure, license & documentation | Done |
+| Dual-bus 4-channel I2S DMA capture & UDP streaming (`WiFi.setSleep(false)`) | Done |
+| 3-line mirrored OLED HUD with `0x3C`/`0x3D` auto-detect (`GPIO 14/21`) | Done |
+| GPIO haptic trigger (`GPIO 40`, 200 ms) & non-blocking RGB LED alert (`GPIO 48`, 1.5 s) | Done |
 | Threaded UDP server with 2.4 s / 1.6 s sliding window (`backend/server.py`) | Done |
-| 360° 2D GCC-PHAT Direction of Arrival (`backend/pipeline.py`) | Done |
+| Per-channel DC offset removal & 360° 2D GCC-PHAT DoA (`backend/pipeline.py`) | Done |
 | Speech-to-text (`faster-whisper`) with boundary overlap deduplication | Done |
+| VADER sentiment tagging (`[Pos]`/`[Neg]`/`[Neu]`) & fuzzy name-call alerts | Done |
 | Online speaker identification (`SpeechBrain ECAPA-TDNN` centroid cache) | Done |
 | 4-channel hardware verification utility (`backend/verify_mics.py`) | Done |
-| Physical frame assembly, mic spacing calibration & YAMNet sound alerts | In progress |
+| Physical frame calibration & optional YAMNet environmental sound classification | In progress |
 
 ## Conventions
 
@@ -142,4 +144,4 @@ Meehir Prabhakar
 
 ## License
 
-Not yet specified.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

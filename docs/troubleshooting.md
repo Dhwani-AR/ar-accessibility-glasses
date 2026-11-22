@@ -27,9 +27,10 @@ The inference worker thread took longer than the `1.6 s` stride to process a `2.
 
 ### Subtitles never trigger, or trigger constantly on background noise
 
-Adjust the RMS thresholds in `AudioPipeline.__init__()` inside `backend/pipeline.py`:
+`AudioPipeline.process()` removes per-channel DC offset automatically before computing RMS. If triggering is still too sensitive or insensitive, adjust the thresholds in `AudioPipeline.__init__()` inside `backend/pipeline.py`:
 - `self.speech_rms = 0.012`: Lower this (e.g., `0.006`) if quiet speech is ignored; raise it (e.g., `0.025`) if room fan noise triggers transcription.
 - `self.alert_rms = 0.18`: Adjust if `[Loud Sound Alert]` triggers too easily or requires too loud a sound.
+- `self.target_names` / `self.name_thresh = 0.78`: Add phonetic variants or adjust the fuzzy match threshold if name-call alerts miss or false-trigger.
 
 ### PowerShell: "running scripts is disabled on this system"
 
@@ -52,17 +53,22 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ### OLED stays blank on boot
 
 - **Check remapped I2C pins:** `SDA` must be wired to **`GPIO 14`** (Left side, 2nd pin from Bottom) and `SCL` to **`GPIO 21`** (Right side, 4th pin from Bottom), plus `+3.3V` and `GND`. Do **not** wire the OLED to `GPIO 8` or `GPIO 9` (those collide with the OV3660 camera bus).
-- **Check continuity:** Ensure `Wire.begin(14, 21)` is called before `oled.begin()` in `firmware/src/main.cpp`.
+- **Check address probing & wiring:** `firmware/src/main.cpp` automatically probes `0x3C` and falls back to `0x3D` after `Wire.begin(14, 21)`. If the panel stays dark, check solder continuity on `SDA`, `SCL`, `VCC`, and `GND`.
 
 ### Vibration motor does not buzz when `haptic: true` is received
 
-- The motor is driven by the **MAX98357A I2S Class D Amplifier**, not a simple GPIO high/low switch.
-- Verify the MAX98357A is wired to `Vin` (`+3.3V`), `GND`, `BCLK` (`GPIO 41`), `LRC` (`GPIO 42`), and `DIN` (`GPIO 38`), with the motor connected directly to the `VO+` and `VO-` screw terminals (no series resistor).
-- Confirm `I2S_NUM_0` is initialized with `I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX` and `data_out_num = 38`.
+- **Isolate software vs. wiring:** Watch the onboard WS2812 RGB LED (`GPIO 48`) and status LED (`GPIO 2`) when an alert arrives. If the RGB LED turns blue for `1500 ms` and `GPIO 2` flashes for `200 ms`, UDP reception and `haptic: true` parsing are working and the fault is on the `GPIO 40` hardware path.
+- **Check `GPIO 40` driver stage:** `triggerHaptic()` drives `GPIO 40` HIGH for `200 ms`. Verify `GPIO 40` is connected to your external transistor/driver input, that the motor shares a common `GND` with the ESP32-S3, and that the motor is not being powered directly from a bare GPIO pin.
 
 ### PSRAM size prints as 0, or the board resets in a loop
 
-Verify `firmware/platformio.ini` includes `board_build.arduino.memory_type = qio_opi`, `board_upload.flash_size = 16MB`, and `-DBOARD_HAS_PSRAM`. Ensure nothing is soldered to `GPIO 35`, `36`, or `37`.
+Verify `firmware/platformio.ini` includes `board_build.arduino.memory_type = qio_opi`, `board_upload.flash_size = 16MB`, `board_build.partitions = default_16MB.csv`, and `-D BOARD_HAS_PSRAM`. Confirm the physical chip reports 16 MB quad flash and 8 MB PSRAM by running:
+
+```bash
+pio pkg exec -p tool-esptoolpy -- esptool.py flash_id
+```
+
+Ensure nothing is soldered to `GPIO 35`, `36`, or `37`.
 
 ### `No module named pip` when PlatformIO installs its toolchain (Linux)
 

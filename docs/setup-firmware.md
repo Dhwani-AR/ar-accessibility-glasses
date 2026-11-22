@@ -43,21 +43,28 @@ If PowerShell blocks the script, see the execution policy fix in [setup-backend.
 
 **Alternative for Windows users:** install Visual Studio Code and the PlatformIO IDE extension, then open the `firmware/` folder. The extension manages its own PlatformIO installation and adds Build, Upload, and Monitor buttons.
 
-**Linux note:** if `pio` fails with `No module named pip` (seen on Arch), install pip through your package manager (`sudo pacman -S python-pip` on Arch, `sudo apt install python3-pip` on Debian/Ubuntu).
+**Linux note:** if `pio` fails with `No module named pip` (seen on Arch), install pip through your system package manager (`sudo pacman -S python-pip` on Arch, `sudo apt install python3-pip` on Debian/Ubuntu).
 
 ## 2. Enable the board's flash and PSRAM
 
-The Freenove N16R8 has 16 MB flash and 8 MB Octal PSRAM, which must be enabled in `firmware/platformio.ini`:
+The Freenove N16R8 has 16 MB Quad flash and 8 MB Octal PSRAM, enabled in `firmware/platformio.ini` on top of the `esp32-s3-devkitc-1` base board profile:
 
 ```ini
 board_upload.flash_size = 16MB
 board_build.arduino.memory_type = qio_opi
 board_build.partitions = default_16MB.csv
 build_flags =
-    -DBOARD_HAS_PSRAM
+    -D CORE_DEBUG_LEVEL=0
+    -D BOARD_HAS_PSRAM
 ```
 
-The `qio_opi` setting is mandatory for Octal PSRAM initialization. Remember that `GPIO 35`, `36`, and `37` are reserved internally by Octal PSRAM and must never be wired.
+PlatformIO's build banner still prints `Espressif ESP32-S3-DevKitC-1-N8 (8 MB QD, No PSRAM)` from the base board ID, while the overrides above apply the 16 MB partition table and Octal PSRAM flags. You can verify the physical flash and PSRAM over USB with:
+
+```bash
+pio pkg exec -p tool-esptoolpy -- esptool.py flash_id
+```
+
+The output should report `Detected flash size: 16MB`, `Flash type set in eFuse: quad (4 data lines)`, and `Embedded PSRAM 8MB (AP_3v3)`. Remember that `GPIO 35`, `36`, and `37` are reserved internally by Octal PSRAM and must never be wired.
 
 ## 3. Wi-Fi and Server IP credentials
 
@@ -96,8 +103,8 @@ pio device monitor       # open serial monitor at 115200 baud
 ```
 
 On boot:
-1. `DispTask` (Core 1) initializes the SSD1306 OLED on `SDA = GPIO 14` and `SCL = GPIO 21` and displays **"AR Glasses Ready / Waiting for UDP..."**.
-2. `NetTask` (Core 0) connects to Wi-Fi, prints `Wi-Fi connected. ESP32 IP: ...` over serial, initializes synchronized dual-bus I2S DMA (`I2S0` master RX/TX on `GPIO 41/42/1/38`, `I2S1` slave RX on `GPIO 47`), and begins streaming 4-channel audio packets to `SERVER_IP:5005`.
+1. `DispTask` (Core 1) initializes `GPIO 2` (status LED), `GPIO 40` (haptic trigger), and `GPIO 48` (onboard RGB LED off), auto-probes the SSD1306 OLED address (`0x3C`, falling back to `0x3D`) on `SDA = GPIO 14` and `SCL = GPIO 21`, configures `U8G2_MIRROR_VERTICAL` at max contrast (`255`), and displays **"AR Glasses Ready / Waiting for UDP..."**.
+2. `NetTask` (Core 0) connects to Wi-Fi with modem sleep disabled (`WiFi.setSleep(false)`), prints `Wi-Fi connected. ESP32 IP: ...` over serial, initializes synchronized dual-bus I2S DMA (`I2S0` master RX/TX clocks on `GPIO 41/42`, `SD0` on `GPIO 1`, `data_out_num = I2S_PIN_NO_CHANGE`; `I2S1` slave RX on `GPIO 47`), and begins streaming 4-channel audio packets to `SERVER_IP:5005`.
 
 ### Serial port troubleshooting
 
