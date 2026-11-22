@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from faster_whisper import WhisperModel
 from speechbrain.inference.speaker import EncoderClassifier
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
 class AudioPipeline:
@@ -29,6 +30,7 @@ class AudioPipeline:
             source="speechbrain/spkrec-ecapa-voxceleb",
             run_opts={"device": device},
         )
+        self.sentiment = SentimentIntensityAnalyzer()
 
     def gcc_phat(self, sig, ref, max_tau):
         n = sig.shape[0] + ref.shape[0]
@@ -104,6 +106,14 @@ class AudioPipeline:
                     return True
         return False
 
+    def analyze_sentiment(self, text):
+        score = float(self.sentiment.polarity_scores(text)["compound"])
+        if score >= 0.05:
+            return "Positive", "[Pos]", score
+        if score <= -0.05:
+            return "Negative", "[Neg]", score
+        return "Neutral", "[Neu]", score
+
     def process(self, chunk):
         chunk = chunk - np.mean(chunk, axis=1, keepdims=True)
         mono = np.mean(chunk, axis=0)
@@ -135,6 +145,8 @@ class AudioPipeline:
                     "speaker": "Alert",
                     "angle": angle,
                     "haptic": True,
+                    "sentiment": "Neutral",
+                    "score": 0.0,
                 }
             return None
 
@@ -143,12 +155,15 @@ class AudioPipeline:
             logging.info(f"Name detected -> {text}")
         haptic = bool(rear_voice or loud_sound or name_heard)
 
+        label, tag, score = self.analyze_sentiment(text)
         speaker = self.identify_speaker(mono)
         return {
-            "text": text[:63],
+            "text": f"{tag} {text}"[:63],
             "speaker": speaker[:15],
             "angle": angle,
             "haptic": haptic,
+            "sentiment": label,
+            "score": score,
         }
 
     def dedup_overlap(self, text):
